@@ -11,7 +11,7 @@ def get_data_from_db(query, db_path="inventory_queue.db"):
 
 # Query the current inventory from the inventory_queue_records table
 inventory_query = """
-    SELECT request_id, request_type, priority, queue_in_time, queue_out_time, items
+    SELECT request_id, request_type, priority, queue_in_time, wait_time, items
     FROM inventory_queue_records
 """
 inventory_df = get_data_from_db(inventory_query)
@@ -30,6 +30,7 @@ optimal_counters_df = get_data_from_db(optimal_counters_query)
 # Assuming the optimal number of counters is derived from some logic in the database
 # Let's select the mode of station_no (most common station number)
 optimal_counters = optimal_counters_df['station_no'].mode()[0] if not optimal_counters_df.empty else 5
+
 
 # Streamlit app starts here
 st.title("Inventory and Queue Management Dashboard")
