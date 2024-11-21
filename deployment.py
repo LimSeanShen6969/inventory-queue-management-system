@@ -83,23 +83,25 @@ if display_choice == "Optimal Number of Counters":
 elif display_choice == "Restock Recommendations":
     st.subheader("Restock Recommendations")
     st.write("Below are the restock recommendations based on unprocessed orders:")
+
+    # Display the restock recommendation table
     st.table(restock_df)
-    
-    # Assuming the 'items' column contains quantities of items in string format
-    # We can extract the restock quantities as a bar chart if needed
-    # You might need to adjust this part based on the actual 'items' format in your database
-    restock_items = restock_df['items'].apply(lambda x: len(x.split(',')))  # Just an example logic
-    st.bar_chart(restock_items)
+
+    # Assuming the 'items' column contains quantities of items in a comma-separated format, 
+    # we can parse it to count the items
+    restock_items_count = restock_df['items'].apply(lambda x: len(x.split(',')) if isinstance(x, str) else 0)  # Count items
+    st.bar_chart(restock_items_count)
 
 # Section for Current Inventory
 elif display_choice == "Current Inventory":
     st.subheader("Current Inventory Levels")
     st.write("Below is the inventory request data (which may also represent current stock data):")
+
+    # Display the current inventory data table
     st.table(inventory_df)
-    
-    # Here you could show current stock, by parsing the 'items' column or creating custom logic
-    # For simplicity, we will use the number of items per request as a placeholder
-    inventory_items_count = inventory_df['items'].apply(lambda x: len(x.split(',')))  # Just an example logic
+
+    # Count items in the inventory (assuming items are comma-separated)
+    inventory_items_count = inventory_df['items'].apply(lambda x: len(x.split(',')) if isinstance(x, str) else 0)  # Count items
     st.bar_chart(inventory_items_count)
 
 # Footer
