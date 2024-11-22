@@ -6,8 +6,12 @@ import sqlite3
 
 # Function to query data from SQLite database
 def get_data_from_db(query, db_path="inventory_queue.db"):
-    with sqlite3.connect(db_path) as conn:
-        return pd.read_sql_query(query, conn)
+    try:
+        with sqlite3.connect(db_path) as conn:
+            return pd.read_sql_query(query, conn)
+    except Exception as e:
+        st.error(f"Error querying database: {e}")
+        return pd.DataFrame()
 
 # Query the current inventory from the inventory_queue_records table
 inventory_query = """
@@ -23,14 +27,14 @@ restock_query = """
 """
 restock_df = get_data_from_db(restock_query)
 
-# Query the optimal counters data (assuming the information is stored here)
+# Query the optimal counters data
 optimal_counters_query = "SELECT DISTINCT station_no FROM inventory_queue_records"
 optimal_counters_df = get_data_from_db(optimal_counters_query)
 
 # Assuming the optimal number of counters is derived from some logic in the database
-# Let's select the mode of station_no (most common station number)
-optimal_counters = optimal_counters_df['station_no'].mode()[0] if not optimal_counters_df.empty else 5
-
+optimal_counters = (
+    optimal_counters_df['station_no'].mode()[0] if not optimal_counters_df.empty else 5
+)
 
 # Streamlit app starts here
 st.title("Inventory and Queue Management Dashboard")
@@ -83,27 +87,28 @@ if display_choice == "Optimal Number of Counters":
 # Section for Restock Recommendations
 elif display_choice == "Restock Recommendations":
     st.subheader("Restock Recommendations")
-    st.write("Below are the restock recommendations based on unprocessed orders:")
+    if not restock_df.empty:
+        st.write("Below are the restock recommendations based on unprocessed orders:")
+        st.table(restock_df)
 
-    # Display the restock recommendation table
-    st.table(restock_df)
-
-    # Assuming the 'items' column contains quantities of items in a comma-separated format, 
-    # we can parse it to count the items
-    restock_items_count = restock_df['items'].apply(lambda x: len(x.split(',')) if isinstance(x, str) else 0)  # Count items
-    st.bar_chart(restock_items_count)
+        # Assuming the 'items' column contains quantities of items in a comma-separated format, 
+        restock_items_count = restock_df['items'].apply(lambda x: len(x.split(',')) if isinstance(x, str) else 0)
+        st.bar_chart(restock_items_count)
+    else:
+        st.warning("No restock data available.")
 
 # Section for Current Inventory
 elif display_choice == "Current Inventory":
     st.subheader("Current Inventory Levels")
-    st.write("Below is the inventory request data (which may also represent current stock data):")
+    if not inventory_df.empty:
+        st.write("Below is the inventory request data (which may also represent current stock data):")
+        st.table(inventory_df)
 
-    # Display the current inventory data table
-    st.table(inventory_df)
-
-    # Count items in the inventory (assuming items are comma-separated)
-    inventory_items_count = inventory_df['items'].apply(lambda x: len(x.split(',')) if isinstance(x, str) else 0)  # Count items
-    st.bar_chart(inventory_items_count)
+        # Count items in the inventory (assuming items are comma-separated)
+        inventory_items_count = inventory_df['items'].apply(lambda x: len(x.split(',')) if isinstance(x, str) else 0)
+        st.bar_chart(inventory_items_count)
+    else:
+        st.warning("No inventory data available.")
 
 # Footer
 st.sidebar.write("Developed by Your Team")
