@@ -128,4 +128,4 @@ elif display_choice == "Current Inventory":
         st.warning("No inventory data available.")
 
 # Footer
-st.sidebar.write("Developed by Your Team")
+st.sidebar.write("Developed by Lim Sean Shen")
