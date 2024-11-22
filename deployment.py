@@ -50,21 +50,37 @@ if display_choice == "Optimal Number of Counters":
     st.subheader("Optimal Number of Counters")
     st.write("This graph shows the relationship between the number of stations and queue times.")
 
-    # Generate queue time data using the logic from your earlier code
+    # Current system parameters
     stations_current = 5
-    queue_time_of_current = 12.5
-    queue_time_r_current = 20.0
-    target_queue_time_of = 10
-    target_queue_time_r = 17
+    queue_time_of_current = 12.5  # Current avg queue time for Order Fulfillment (minutes)
+    queue_time_r_current = 20.0   # Current avg queue time for Restock (minutes)
+
+    # Target queue times
+    target_queue_time_of = 10     # Target for Order Fulfillment (minutes)
+    target_queue_time_r = 17      # Target for Restock (minutes)
+
+    # Reduction rates per additional station (estimated)
     reduction_rate_of = (queue_time_of_current - target_queue_time_of) / stations_current
     reduction_rate_r = (queue_time_r_current - target_queue_time_r) / stations_current
 
+    # Function to calculate queue times given number of stations
     def calculate_queue_times(stations):
         of_queue_time = queue_time_of_current - reduction_rate_of * (stations - stations_current)
         r_queue_time = queue_time_r_current - reduction_rate_r * (stations - stations_current)
         return of_queue_time, r_queue_time
 
-    stations_range = np.arange(5, 15)
+    # Iteratively add stations until targets are met
+    stations_needed = stations_current
+    while True:
+        of_queue_time, r_queue_time = calculate_queue_times(stations_needed)
+        if of_queue_time <= target_queue_time_of and r_queue_time <= target_queue_time_r:
+            break
+        stations_needed += 1
+
+    st.write(f"The optimal number of counters to meet target queue times is: **{stations_needed}**.")
+
+    # Plotting queue times as a function of the number of stations
+    stations_range = np.arange(stations_current, stations_needed + 5)  # Extend range for visualization
     queue_time_of = [calculate_queue_times(st)[0] for st in stations_range]
     queue_time_r = [calculate_queue_times(st)[1] for st in stations_range]
 
@@ -74,13 +90,14 @@ if display_choice == "Optimal Number of Counters":
     plt.plot(stations_range, queue_time_r, label="Restock Queue Time", color='blue', linestyle='-')
     plt.axhline(y=target_queue_time_of, color='green', linestyle='--', label="Target Queue Time (Order Fulfillment: 10 mins)")
     plt.axhline(y=target_queue_time_r, color='blue', linestyle='--', label="Target Queue Time (Restock: 17 mins)")
-    plt.axvline(x=optimal_counters, color='red', linestyle='--', label=f"Optimal Counters: {optimal_counters}")
+    plt.axvline(x=stations_needed, color='red', linestyle='--', label=f"Optimal Counters: {stations_needed}")
     plt.xlabel("Number of Stations")
     plt.ylabel("Queue Time (minutes)")
     plt.title("Optimization of Queue Time vs. Number of Stations")
     plt.legend()
     plt.grid(True)
     st.pyplot(plt)
+
 
     st.write(f"The optimal number of counters to meet target queue times is: **{optimal_counters}**.")
 
