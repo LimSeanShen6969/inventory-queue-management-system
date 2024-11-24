@@ -2,89 +2,64 @@ import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from prophet import Prophet
 import sqlite3
+from prophet import Prophet
 
+# Database path
+DB_PATH = "inventory_queue.db"
 
+# Function to fetch available items from the database
+def fetch_inventory():
+    """
+    Fetch the current inventory items and their quantities from the database.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        query = """
+        SELECT item, SUM(quantity) AS total_quantity
+        FROM inventory_table
+        GROUP BY item
+        """
+        inventory_df = pd.read_sql_query(query, conn)
+        conn.close()
+        return dict(zip(inventory_df['item'], inventory_df['total_quantity']))
+    except Exception as e:
+        st.error(f"Error fetching inventory from the database: {e}")
+        return {}
 
-conn = sqlite3.connect("inventory_queue.db")
-# Query to get transaction data in chronological order
-query_transactions = """
-SELECT request_id, request_type, items
-FROM inventory_queue_records
-ORDER BY queue_in_time;
-"""
-
-# Load transaction data into a DataFrame
-transactions_df = pd.read_sql_query(query_transactions, conn)
-
-# Close the database connection
-conn.close()
+# Function to fetch transaction data
+def fetch_transactions():
+    """
+    Fetch transaction data from the database.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        query = """
+        SELECT request_id, request_type, items, queue_in_time, queue_out_time
+        FROM inventory_queue_records
+        ORDER BY queue_in_time
+        """
+        transactions_df = pd.read_sql_query(query, conn)
+        conn.close()
+        return transactions_df
+    except Exception as e:
+        st.error(f"Error fetching transactions: {e}")
+        return pd.DataFrame()
 
 # Helper function to parse item quantities from string format
 def parse_items(item_string):
+    """
+    Parse item quantities from the 'items' string column.
+    """
     item_quantities = {}
-    items = item_string.split(", ")
-    for item in items:
-        name, qty = item.split(": ")
-        item_quantities[name] = int(qty)
+    try:
+        items = item_string.split(", ")
+        for item in items:
+            name, qty = item.split(": ")
+            item_quantities[name] = int(qty)
+    except Exception as e:
+        st.error(f"Error parsing items: {e}")
     return item_quantities
-
-# Initialize dictionaries and counters for tracking
-inventory = {}
-total_sold = {}
-total_restocked = {}
-total_orders_received = 0
-total_orders_fulfilled = 0
-total_orders_declined = 0
-
-# Process each transaction in chronological order and check orders
-for index, row in transactions_df.iterrows():
-    request_id = row['request_id']
-    request_type = row['request_type']
-    item_quantities = parse_items(row['items'])
-
-    if request_type == 'Restock':
-        # Update inventory and total restocked quantities
-        for item, qty in item_quantities.items():
-            inventory[item] = inventory.get(item, 0) + qty
-            total_restocked[item] = total_restocked.get(item, 0) + qty
-        print(f"Restocked items: {item_quantities}. Updated Inventory: {inventory}")
-
-    elif request_type == 'Order Fulfillment':
-        # Track total orders received
-        total_orders_received += 1
-
-        # Check if there is enough stock to fulfill the order
-        can_fulfill = True
-        for item, qty in item_quantities.items():
-            if inventory.get(item, 0) < qty:
-                can_fulfill = False
-                print(f"Order {request_id} cannot be fulfilled due to insufficient stock for item: {item}")
-                break
-
-        # Fulfill the order if stock is sufficient
-        if can_fulfill:
-            total_orders_fulfilled += 1
-            for item, qty in item_quantities.items():
-                inventory[item] -= qty
-                total_sold[item] = total_sold.get(item, 0) + qty
-            print(f"Order {request_id} fulfilled successfully. Updated Inventory: {inventory}")
-        else:
-            total_orders_declined += 1
-            print(f"Order {request_id} skipped due to insufficient stock.")
-
-# Convert the final inventory dictionary to a DataFrame
-remaining_df = pd.DataFrame(list(inventory.items()), columns=['Item', 'Remaining Inventory'])
-sold_df = pd.DataFrame(list(total_sold.items()), columns=['Item', 'Total Sold'])
-restocked_df = pd.DataFrame(list(total_restocked.items()), columns=['Item', 'Total Restocked'])
-# Convert the DataFrame `remaining_df` to a dictionary format for easy access
-final_inventory = dict(zip(remaining_df['Item'], remaining_df['Remaining Inventory']))
-
-
-# Database path for inventory queue (optional, if you're using a database)
-DB_PATH = "inventory_queue.db"
-
 
 # Queue Time Optimization Function
 def queue_time_optimization():
@@ -132,56 +107,25 @@ def queue_time_optimization():
     ax.grid(True)
     st.pyplot(fig, clear_figure=True)
 
-
 # Restock Recommendation Function
 def restock_recommendation():
     st.title("Restock Recommendations")
 
-    # Load data from SQLite database (if available)
-    if not st.file_uploader("Upload database file if required", type=["db"]):
-        if not DB_PATH:
-            st.error("Database file not found.")
-            return
+    inventory = fetch_inventory()
+    transactions_df = fetch_transactions()
 
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        query = "SELECT * FROM inventory_queue_records"
-        df = pd.read_sql_query(query, conn)
-        conn.close()
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return
+    # Filter order fulfillment transactions
+    sold_df = transactions_df[transactions_df['request_type'] == 'Order Fulfillment']
 
-    # Convert datetime columns
-    try:
-        df['queue_in_time'] = pd.to_datetime(df['queue_in_time'])
-        df['queue_out_time'] = pd.to_datetime(df['queue_out_time'])
-        df['month'] = df['queue_in_time'].dt.to_period('M')
-    except Exception as e:
-        st.error(f"Error processing date columns: {e}")
-        return
-
-    sold_df = df[df['request_type'] == 'Order Fulfillment']
-
-    # Parse items
-    def parse_items(items_str):
-        items = {}
-        try:
-            items_list = items_str.split(', ')
-            for item in items_list:
-                name, qty = item.split(': ')
-                items[name] = int(qty)
-        except Exception as e:
-            st.error(f"Error parsing items: {e}")
-        return items
-
+    # Parse sold items
     items_sold_per_month = []
     for _, row in sold_df.iterrows():
         item_quantities = parse_items(row['items'])
         for item, qty in item_quantities.items():
-            items_sold_per_month.append({'month': row['month'], 'item': item, 'quantity': qty})
+            items_sold_per_month.append({'month': row['queue_in_time'], 'item': item, 'quantity': qty})
 
     sold_per_month_df = pd.DataFrame(items_sold_per_month)
+    sold_per_month_df['month'] = pd.to_datetime(sold_per_month_df['month']).dt.to_period('M')
     monthly_sold = sold_per_month_df.groupby(['month', 'item'])['quantity'].sum().unstack().fillna(0)
 
     restock_needed = {}
@@ -202,109 +146,36 @@ def restock_recommendation():
         forecast = model.predict(future)
 
         predicted_sales = forecast[['ds', 'yhat']].tail(3)['yhat'].sum()
-        current_stock = st.session_state.inventory.get(item, 0)
+        current_stock = inventory.get(item, 0)
         restock_needed[item] = max(0, predicted_sales - current_stock)
 
     st.write("**Restock Recommendations**")
     for item, quantity in restock_needed.items():
         st.write(f"{item}: **{round(quantity)} units**")
 
-
 # Inventory Management Function
 def inventory_management():
     st.title("Inventory Management")
 
-    def display_inventory():
-        st.write("**Available Inventory:**")
-        for item, qty in st.session_state.inventory.items():
-            st.write(f"{item}: {qty} units")
+    # Load current inventory
+    inventory = fetch_inventory()
 
-    display_inventory()
+    # Display available inventory
+    st.write("**Available Inventory:**")
+    for item, qty in inventory.items():
+        st.write(f"{item}: {qty} units")
 
+    # Add new order
     st.write("**Add New Order:**")
-    item = st.selectbox("Select Item", list(st.session_state.inventory.keys()))
-    qty = st.number_input("Enter Quantity", min_value=1)
+    item = st.selectbox("Select Item", list(inventory.keys()))
+    qty = st.number_input("Enter Quantity", min_value=1, step=1)
 
     if st.button("Submit Order"):
-        if st.session_state.inventory[item] >= qty:
-            st.session_state.inventory[item] -= qty
+        if inventory.get(item, 0) >= qty:
+            inventory[item] -= qty
             st.write(f"Order fulfilled: {qty} units of {item}")
         else:
-            st.write(f"Not enough stock for {item}. Available: {st.session_state.inventory[item]} units.")
-
-        display_inventory()
-
-
-# Function to display available items and their quantities
-def display_available_inventory(inventory):
-    st.write("**Available Inventory:**")
-    inventory_list = []
-    for index, (item, qty) in enumerate(inventory.items(), 1):  # Enumerate to add numbering
-        inventory_list.append(f"{index}. {item}: {qty} units available")
-    return inventory_list  # Return the list of items for number selection
-
-# Function to collect upcoming orders from the user
-def collect_upcoming_orders():
-    orders = []
-    st.write("Enter upcoming orders. Type 'done' to finish adding orders.")
-
-    while True:
-        items = display_available_inventory(st.session_state.inventory)  # Show inventory before each new order
-        order = {}
-
-        st.write("\nEnter a new order:")
-        while True:
-            item_input = st.text_input("Enter item name or number (or type 'done' to finish this order): ").strip().lower()
-            if item_input == "done":
-                break
-
-            # If it's a number, treat it as an index
-            if item_input.isdigit():
-                index = int(item_input) - 1  # Convert to zero-based index
-                if 0 <= index < len(items):
-                    item = items[index].split(":")[0]
-                else:
-                    st.error("Invalid selection. Please try again.")
-                    continue
-            else:
-                # If it's a name, match case-insensitively
-                item = next((i.split(":")[0] for i in items if i.lower().startswith(item_input)), None)
-                if not item:
-                    st.error(f"Item '{item_input}' not found in inventory. Please try again.")
-                    continue
-
-            qty = st.number_input(f"Enter quantity for {item}: ", min_value=1, step=1)
-            if qty > 0 and st.session_state.inventory.get(item, 0) >= qty:
-                order[item] = qty
-            else:
-                st.error(f"Not enough stock for {item}. Only {st.session_state.inventory.get(item, 0)} units available.")
-
-        if order:
-            orders.append(order)
-
-        more_orders = st.selectbox("Do you want to add another order?", ["yes", "no"])
-        if more_orders != "yes":
-            break
-
-    return orders
-
-# Function to fulfill the orders and update stock in real-time
-def fulfill_orders_and_update_stock(orders):
-    for order in orders:
-        for item, qty in order.items():
-            if item in st.session_state.inventory:
-                if st.session_state.inventory[item] >= qty:
-                    st.session_state.inventory[item] -= qty
-                    st.write(f"Order fulfilled: {qty} units of {item}")
-                else:
-                    st.write(f"Not enough stock for {item}. Only {st.session_state.inventory[item]} units available.")
-                    st.session_state.inventory[item] = 0  # Fulfill as much as possible, set to 0 if not enough
-            else:
-                st.write(f"Item {item} not found in inventory.")
-
-        # Display updated inventory after each order is processed
-        st.write("\nUpdated inventory after fulfilling the current order:")
-        display_available_inventory(st.session_state.inventory)
+            st.error(f"Not enough stock for {item}. Available: {inventory.get(item, 0)} units.")
 
 # Sidebar Navigation
 st.sidebar.title("Navigation")
@@ -316,4 +187,3 @@ elif option == "Restock Recommendations":
     restock_recommendation()
 elif option == "Inventory Management":
     inventory_management()
-
