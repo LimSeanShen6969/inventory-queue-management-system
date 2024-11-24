@@ -5,6 +5,8 @@ import pandas as pd
 from prophet import Prophet
 import sqlite3
 
+
+remaining_df = pd.DataFrame(list(inventory.items()), columns=['Item', 'Remaining Inventory'])
 # Convert the DataFrame `remaining_df` to a dictionary format for easy access
 final_inventory = dict(zip(remaining_df['Item'], remaining_df['Remaining Inventory']))
 
