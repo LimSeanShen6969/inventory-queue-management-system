@@ -5,9 +5,9 @@ import pandas as pd
 from prophet import Prophet
 import sqlite3
 
-# Initialize session state for inventory management
-if "inventory" not in st.session_state:
-    st.session_state.inventory = {"Item_A": 100, "Item_B": 200}
+# Convert the DataFrame `remaining_df` to a dictionary format for easy access
+final_inventory = dict(zip(remaining_df['Item'], remaining_df['Remaining Inventory']))
+
 
 # Database path for inventory queue (optional, if you're using a database)
 DB_PATH = "inventory_queue.db"
