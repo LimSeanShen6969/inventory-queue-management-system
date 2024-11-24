@@ -3,10 +3,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from prophet import Prophet
-from datetime import datetime
 import sqlite3
 
-# Function to calculate queue times for station optimization
+# Initialize session state for inventory management
+if "inventory" not in st.session_state:
+    st.session_state.inventory = {"Item_A": 100, "Item_B": 200}
+
+# Database path
+DB_PATH = "inventory_queue.db"
+
+
+# Queue Time Optimization Function
 def queue_time_optimization():
     st.title("Queue Time Optimization")
 
@@ -50,22 +57,36 @@ def queue_time_optimization():
     ax.set_title("Optimization of Queue Time vs. Number of Stations")
     ax.legend()
     ax.grid(True)
-    st.pyplot(fig)
+    st.pyplot(fig, clear_figure=True)
 
-# Function to provide restock recommendations
+
+# Restock Recommendation Function
 def restock_recommendation():
     st.title("Restock Recommendations")
 
     # Load data from SQLite database
-    conn = sqlite3.connect("inventory_queue.db")
-    query = "SELECT * FROM inventory_queue_records"
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    if not st.file_uploader("Upload database file if required", type=["db"]):
+        if not DB_PATH:
+            st.error("Database file not found.")
+            return
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        query = "SELECT * FROM inventory_queue_records"
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return
 
     # Convert datetime columns
-    df['queue_in_time'] = pd.to_datetime(df['queue_in_time'])
-    df['queue_out_time'] = pd.to_datetime(df['queue_out_time'])
-    df['month'] = df['queue_in_time'].dt.to_period('M')
+    try:
+        df['queue_in_time'] = pd.to_datetime(df['queue_in_time'])
+        df['queue_out_time'] = pd.to_datetime(df['queue_out_time'])
+        df['month'] = df['queue_in_time'].dt.to_period('M')
+    except Exception as e:
+        st.error(f"Error processing date columns: {e}")
+        return
 
     sold_df = df[df['request_type'] == 'Order Fulfillment']
 
@@ -78,7 +99,7 @@ def restock_recommendation():
                 name, qty = item.split(': ')
                 items[name] = int(qty)
         except Exception as e:
-            print(f"Error parsing items: {e}")
+            st.error(f"Error parsing items: {e}")
         return items
 
     items_sold_per_month = []
@@ -90,13 +111,16 @@ def restock_recommendation():
     sold_per_month_df = pd.DataFrame(items_sold_per_month)
     monthly_sold = sold_per_month_df.groupby(['month', 'item'])['quantity'].sum().unstack().fillna(0)
 
-    final_inventory = {"Item_A": 100, "Item_B": 200}  # Mock inventory for now
     restock_needed = {}
 
     for item in monthly_sold.columns:
         item_sales = monthly_sold[item].reset_index()
         item_sales.columns = ['ds', 'y']
         item_sales['ds'] = item_sales['ds'].dt.to_timestamp()
+
+        if len(item_sales) < 2:
+            st.warning(f"Not enough data to forecast sales for {item}.")
+            continue
 
         model = Prophet()
         model.fit(item_sales)
@@ -105,40 +129,40 @@ def restock_recommendation():
         forecast = model.predict(future)
 
         predicted_sales = forecast[['ds', 'yhat']].tail(3)['yhat'].sum()
-        current_stock = final_inventory.get(item, 0)
+        current_stock = st.session_state.inventory.get(item, 0)
         restock_needed[item] = max(0, predicted_sales - current_stock)
 
     st.write("**Restock Recommendations**")
     for item, quantity in restock_needed.items():
         st.write(f"{item}: **{round(quantity)} units**")
 
-# Function to manage inventory
+
+# Inventory Management Function
 def inventory_management():
     st.title("Inventory Management")
 
-    final_inventory = {"Item_A": 100, "Item_B": 200}  # Mock inventory
-
     def display_inventory():
         st.write("**Available Inventory:**")
-        for item, qty in final_inventory.items():
+        for item, qty in st.session_state.inventory.items():
             st.write(f"{item}: {qty} units")
 
     display_inventory()
 
     st.write("**Add New Order:**")
-    item = st.selectbox("Select Item", list(final_inventory.keys()))
+    item = st.selectbox("Select Item", list(st.session_state.inventory.keys()))
     qty = st.number_input("Enter Quantity", min_value=1)
 
     if st.button("Submit Order"):
-        if final_inventory[item] >= qty:
-            final_inventory[item] -= qty
+        if st.session_state.inventory[item] >= qty:
+            st.session_state.inventory[item] -= qty
             st.write(f"Order fulfilled: {qty} units of {item}")
         else:
-            st.write(f"Not enough stock for {item}. Available: {final_inventory[item]} units.")
+            st.write(f"Not enough stock for {item}. Available: {st.session_state.inventory[item]} units.")
 
         display_inventory()
 
-# Main navigation
+
+# Main Navigation
 st.sidebar.title("Navigation")
 option = st.sidebar.radio("Go to", ["Queue Time Optimization", "Restock Recommendation", "Inventory Management"])
 
