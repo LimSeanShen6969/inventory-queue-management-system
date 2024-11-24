@@ -6,6 +6,8 @@ from prophet import Prophet
 import sqlite3
 
 
+
+conn = sqlite3.connect("inventory_queue.db")
 # Query to get transaction data in chronological order
 query_transactions = """
 SELECT request_id, request_type, items
