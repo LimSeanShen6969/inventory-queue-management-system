@@ -17,13 +17,14 @@ DB_PATH = "inventory_queue.db"
 def queue_time_optimization():
     st.title("Queue Time Optimization")
 
-    # Input parameters
-    stations_current = 5
-    queue_time_of_current = 12.5  # Current avg queue time for Order Fulfillment (minutes)
-    queue_time_r_current = 20.0   # Current avg queue time for Restock (minutes)
-    target_queue_time_of = 10     # Target for Order Fulfillment (minutes)
-    target_queue_time_r = 17      # Target for Restock (minutes)
+    # User inputs for queue details
+    stations_current = st.number_input("Enter Current Number of Stations:", min_value=1, value=5)
+    queue_time_of_current = st.number_input("Enter Current Average Queue Time (Order Fulfillment) (minutes):", value=12.5)
+    queue_time_r_current = st.number_input("Enter Current Average Queue Time (Restock) (minutes):", value=20.0)
+    target_queue_time_of = st.number_input("Enter Target Queue Time (Order Fulfillment) (minutes):", value=10.0)
+    target_queue_time_r = st.number_input("Enter Target Queue Time (Restock) (minutes):", value=17.0)
 
+    # Calculate reduction rates
     reduction_rate_of = (queue_time_of_current - target_queue_time_of) / stations_current
     reduction_rate_r = (queue_time_r_current - target_queue_time_r) / stations_current
 
@@ -32,6 +33,7 @@ def queue_time_optimization():
         r_queue_time = queue_time_r_current - reduction_rate_r * (stations - stations_current)
         return of_queue_time, r_queue_time
 
+    # Predict the optimal number of stations
     stations_needed = stations_current
     while True:
         of_queue_time, r_queue_time = calculate_queue_times(stations_needed)
@@ -41,11 +43,12 @@ def queue_time_optimization():
 
     st.write(f"Optimal number of stations: **{stations_needed}**")
 
+    # Generate queue time predictions for a range of stations
     stations_range = np.arange(stations_current, stations_needed + 5)
     queue_time_of = [calculate_queue_times(st)[0] for st in stations_range]
     queue_time_r = [calculate_queue_times(st)[1] for st in stations_range]
 
-    # Plotting
+    # Plot the results
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(stations_range, queue_time_of, label="Order Fulfillment Queue Time", color='green')
     ax.plot(stations_range, queue_time_r, label="Restock Queue Time", color='blue')
@@ -58,7 +61,6 @@ def queue_time_optimization():
     ax.legend()
     ax.grid(True)
     st.pyplot(fig, clear_figure=True)
-
 
 # Restock Recommendation Function
 def restock_recommendation():
@@ -186,6 +188,10 @@ def inventory_management():
             st.write(f"{item}: {qty} units")
 
     display_inventory()
+
+        # Continue button for further orders
+    if st.button("Continue"):
+        st.write("You can now proceed with additional orders.")
 
     # Add new order
     st.write("**Add New Order:**")
