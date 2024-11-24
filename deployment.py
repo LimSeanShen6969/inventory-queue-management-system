@@ -9,7 +9,7 @@ from prophet import Prophet
 # Streamlit app title
 st.title("Queue Time Optimization & Inventory Management")
 
-# Sidebar for user inputs
+# Sidebar for queue time optimization inputs
 st.sidebar.header("Queue Time Optimization Inputs")
 stations_current = st.sidebar.slider("Current Number of Stations", 1, 10, 5)
 queue_time_of_current = st.sidebar.number_input("Current Order Fulfillment Queue Time (minutes)", value=12.5)
@@ -59,7 +59,7 @@ plt.grid(True)
 # Display plot in Streamlit
 st.pyplot(plt, clear_figure=True)
 
-# Inventory Management and Restock Recommendations
+# Sidebar for inventory management inputs
 st.sidebar.header("Inventory Management Inputs")
 
 # Connect to the SQLite database
@@ -75,11 +75,10 @@ conn.close()
 df['queue_in_time'] = pd.to_datetime(df['queue_in_time'])
 df['queue_out_time'] = pd.to_datetime(df['queue_out_time'])
 
-# --- Monthly Breakdown ---
 # Add month column for monthly analysis
 df['month'] = df['queue_in_time'].dt.to_period('M')
 
-# Filter out orders
+# Filter out orders for analysis
 sold_df = df[df['request_type'] == 'Order Fulfillment']
 
 # Parse and expand items
@@ -106,32 +105,98 @@ sold_per_month_df = pd.DataFrame(items_sold_per_month)
 # Aggregate data by month and item
 monthly_sold = sold_per_month_df.groupby(['month', 'item'])['quantity'].sum().unstack().fillna(0)
 
-# --- Time Series Forecasting with Prophet ---
+# Time Series Forecasting with Prophet
 restock_needed = {}
 
 # Calculate the restock needed for each item based on predicted sales
 for item in monthly_sold.columns:
-    # Prepare data for Prophet
     item_sales = monthly_sold[item].reset_index()
     item_sales.columns = ['ds', 'y']  # 'ds' is the date column, 'y' is the sales quantity column
     item_sales['ds'] = item_sales['ds'].dt.to_timestamp()
 
-    # Initialize and fit Prophet model
     model = Prophet()
     model.fit(item_sales)
 
-    # Predict for the next 3 months
     future = model.make_future_dataframe(periods=3, freq='M')
     forecast = model.predict(future)
 
-    # Calculate predicted sales for the next 3 months
     predicted_sales = forecast[['ds', 'yhat']].tail(3)['yhat'].sum()
 
-    # Retrieve current stock (Assumed stock data exists, replace with actual column)
-    current_stock = 0  # Replace with actual current stock logic
-    restock_needed[item] = max(0, predicted_sales - current_stock)  # Only restock if demand exceeds stock
+    current_stock = 0  # Replace with actual stock
+    restock_needed[item] = max(0, predicted_sales - current_stock)
 
 # Output restock recommendations
 st.write("**Restock Recommendations:**")
 for item, quantity in restock_needed.items():
     st.write(f"{item}: **{round(quantity)} units**")
+
+# Assuming `remaining_df` holds the inventory data
+remaining_df = pd.DataFrame({'Item': ['item1', 'item2', 'item3'], 'Remaining Inventory': [100, 50, 25]})
+final_inventory = dict(zip(remaining_df['Item'], remaining_df['Remaining Inventory']))
+
+# Function to display available items and their quantities with number-based selection
+def display_available_inventory(inventory):
+    items = list(inventory.items())
+    inventory_list = []
+    for index, (item, qty) in enumerate(items, 1):
+        inventory_list.append(f"{index}. {item}: {qty} units available")
+    return inventory_list  # Return the list of items for number selection
+
+# Function to collect upcoming orders
+def collect_upcoming_orders():
+    orders = []
+    st.write("Enter upcoming orders. Type 'done' to finish adding orders.")
+
+    while True:
+        items = display_available_inventory(final_inventory)  # Show inventory before each new order
+        order = {}
+
+        st.write("\nEnter a new order:")
+        while True:
+            item_input = st.text_input("Enter item name or number (or type 'done' to finish this order): ").strip().lower()
+            if item_input == "done":
+                break
+
+            if item_input.isdigit():
+                index = int(item_input) - 1
+                if 0 <= index < len(items):
+                    item = items[index].split(":")[0]
+                else:
+                    st.error("Invalid selection. Please try again.")
+                    continue
+            else:
+                item = next((i.split(":")[0] for i in items if i.lower() == item_input), None)
+                if not item:
+                    st.error(f"Item '{item_input}' is not in inventory. Please try again.")
+                    continue
+
+            qty = st.number_input(f"Enter quantity for {item}: ", min_value=0, step=1)
+            if qty > 0 and final_inventory.get(item, 0) >= qty:
+                order[item] = qty
+            else:
+                st.error(f"Not enough stock for {item}. Only {final_inventory.get(item, 0)} units available.")
+
+        if order:
+            orders.append(order)
+
+        more_orders = st.selectbox("Do you want to add another order?", ["yes", "no"])
+        if more_orders != "yes":
+            break
+
+    return orders
+
+# Function to fulfill the orders and update stock
+def fulfill_orders_and_update_stock(orders):
+    for order in orders:
+        for item, qty in order.items():
+            if item in final_inventory:
+                if final_inventory[item] >= qty:
+                    final_inventory[item] -= qty
+                    st.write(f"Order fulfilled: {qty} units of {item}")
+                else:
+                    st.write(f"Not enough stock for {item}. Only {final_inventory[item]} units available.")
+                    final_inventory[item] = 0
+
+# Collect upcoming orders and fulfill them
+upcoming_orders = collect_upcoming_orders()
+fulfill_orders_and_update_stock(upcoming_orders)
