@@ -6,7 +6,76 @@ from prophet import Prophet
 import sqlite3
 
 
+# Query to get transaction data in chronological order
+query_transactions = """
+SELECT request_id, request_type, items
+FROM inventory_queue_records
+ORDER BY queue_in_time;
+"""
+
+# Load transaction data into a DataFrame
+transactions_df = pd.read_sql_query(query_transactions, conn)
+
+# Close the database connection
+conn.close()
+
+# Helper function to parse item quantities from string format
+def parse_items(item_string):
+    item_quantities = {}
+    items = item_string.split(", ")
+    for item in items:
+        name, qty = item.split(": ")
+        item_quantities[name] = int(qty)
+    return item_quantities
+
+# Initialize dictionaries and counters for tracking
+inventory = {}
+total_sold = {}
+total_restocked = {}
+total_orders_received = 0
+total_orders_fulfilled = 0
+total_orders_declined = 0
+
+# Process each transaction in chronological order and check orders
+for index, row in transactions_df.iterrows():
+    request_id = row['request_id']
+    request_type = row['request_type']
+    item_quantities = parse_items(row['items'])
+
+    if request_type == 'Restock':
+        # Update inventory and total restocked quantities
+        for item, qty in item_quantities.items():
+            inventory[item] = inventory.get(item, 0) + qty
+            total_restocked[item] = total_restocked.get(item, 0) + qty
+        print(f"Restocked items: {item_quantities}. Updated Inventory: {inventory}")
+
+    elif request_type == 'Order Fulfillment':
+        # Track total orders received
+        total_orders_received += 1
+
+        # Check if there is enough stock to fulfill the order
+        can_fulfill = True
+        for item, qty in item_quantities.items():
+            if inventory.get(item, 0) < qty:
+                can_fulfill = False
+                print(f"Order {request_id} cannot be fulfilled due to insufficient stock for item: {item}")
+                break
+
+        # Fulfill the order if stock is sufficient
+        if can_fulfill:
+            total_orders_fulfilled += 1
+            for item, qty in item_quantities.items():
+                inventory[item] -= qty
+                total_sold[item] = total_sold.get(item, 0) + qty
+            print(f"Order {request_id} fulfilled successfully. Updated Inventory: {inventory}")
+        else:
+            total_orders_declined += 1
+            print(f"Order {request_id} skipped due to insufficient stock.")
+
+# Convert the final inventory dictionary to a DataFrame
 remaining_df = pd.DataFrame(list(inventory.items()), columns=['Item', 'Remaining Inventory'])
+sold_df = pd.DataFrame(list(total_sold.items()), columns=['Item', 'Total Sold'])
+restocked_df = pd.DataFrame(list(total_restocked.items()), columns=['Item', 'Total Restocked'])
 # Convert the DataFrame `remaining_df` to a dictionary format for easy access
 final_inventory = dict(zip(remaining_df['Item'], remaining_df['Remaining Inventory']))
 
