@@ -2,126 +2,122 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import numpy as np
+from joblib import load
 import matplotlib.pyplot as plt
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+import os
 
-# Title
-st.title("Queue Time Optimization with Real-Time Monitoring")
+# Constants
+DATABASE_PATH = "grocery_inventory.db"
+MODEL_DIR = "models"
+PROCESSING_RATE_PER_COUNTER = 72.5  # Number of customers per hour per counter
+INITIAL_COUNTERS = 5  # Default counters at start
+TARGET_QUEUE_TIME = 8  # Target queue time in minutes
 
-# Database and Model Setup
-@st.cache_resource
-def load_data():
-    conn = sqlite3.connect("grocery_inventory.db")
-    query = "SELECT request_id, request_type, queue_in_time, queue_out_time FROM inventory_queue_records"
+# Load pre-trained models
+model_length = load(os.path.join(MODEL_DIR, "QueueLengthModel.joblib"))
+model_time = load(os.path.join(MODEL_DIR, "QueueTimeModel.joblib"))
+
+# Function to ingest data from the SQLite database
+def load_data(database_path):
+    conn = sqlite3.connect(database_path)
+    query = "SELECT request_id, request_type, queue_in_time, queue_out_time, items FROM inventory_queue_records"
     df = pd.read_sql_query(query, conn)
     conn.close()
+    return df
 
+# Preprocess the data
+def preprocess_data(df):
     df['queue_in_time'] = pd.to_datetime(df['queue_in_time'])
     df['queue_out_time'] = pd.to_datetime(df['queue_out_time'])
     df['queue_time'] = (df['queue_out_time'] - df['queue_in_time']).dt.total_seconds() / 60
+    df = df[df['request_type'] == 'Order Fulfillment']
+    df['day_of_week'] = df['queue_in_time'].dt.dayofweek
+    df['hour_of_day'] = df['queue_in_time'].dt.hour
     return df
 
-@st.cache_resource
-def train_models(df):
-    # Filter and feature extraction
-    df_of = df[df['request_type'] == 'Order Fulfillment']
-    df_of['time_slot'] = df_of['queue_in_time'].dt.floor('H')
-    df_of['day_of_week'] = df_of['queue_in_time'].dt.dayofweek
-    df_of['hour_of_day'] = df_of['queue_in_time'].dt.hour
-    summary = df_of.groupby(['time_slot', 'request_type']).agg(
-        queue_length=('request_id', 'count'),
-        avg_queue_time=('queue_time', 'mean')
-    ).reset_index()
-    summary['day_of_week'] = summary['time_slot'].dt.dayofweek
-    summary['hour_of_day'] = summary['time_slot'].dt.hour
-    summary['avg_of_queue_length'] = 5.79
-    summary['avg_of_queue_time'] = 10.00
+# Calculate optimal counters based on target queue time
+def calculate_optimal_counters(current_queue_time, target_queue_time, current_counters):
+    # Reduction rate per additional counter (estimated)
+    reduction_rate = (current_queue_time - target_queue_time) / current_counters
 
-    # Prepare data
-    X = summary[['day_of_week', 'hour_of_day', 'avg_of_queue_length', 'avg_of_queue_time']]
-    y_length = summary['queue_length']
-    y_time = summary['avg_queue_time']
+    # Function to calculate queue time given the number of counters
+    def calculate_queue_time(counters):
+        return current_queue_time - reduction_rate * (counters - current_counters)
 
-    # Train-test split
-    X_train_len, X_test_len, y_train_len, y_test_len = train_test_split(X, y_length, test_size=0.2, random_state=42)
-    X_train_time, X_test_time, y_train_time, y_test_time = train_test_split(X, y_time, test_size=0.2, random_state=42)
+    # Iteratively add counters until the target queue time is met
+    counters_needed = current_counters
+    while True:
+        queue_time = calculate_queue_time(counters_needed)
+        if queue_time <= target_queue_time:
+            break
+        counters_needed += 1
+    return counters_needed
 
-    # Train models
-    model_length = RandomForestRegressor(random_state=42)
-    model_time = RandomForestRegressor(random_state=42)
-    model_length.fit(X_train_len, y_train_len)
-    model_time.fit(X_train_time, y_train_time)
-
-    return model_length, model_time
-
-# Load data and train models
-df = load_data()
-model_length, model_time = train_models(df)
-
-# Queue Prediction Function
-def predict_queue_metrics(day_of_week, hour_of_day, counters=5, rate=15.74):
+# Predict queue metrics and recommend counters
+def predict_queue_metrics_and_counters(day_of_week, hour_of_day, avg_queue_length, avg_queue_time):
     input_data = pd.DataFrame({
         'day_of_week': [day_of_week],
         'hour_of_day': [hour_of_day],
-        'avg_of_queue_length': [5.79],
-        'avg_of_queue_time': [10.00]
+        'avg_of_queue_length': [avg_queue_length],
+        'avg_of_queue_time': [avg_queue_time]
     })
-    predicted_length = model_length.predict(input_data)[0]
-    predicted_time = model_time.predict(input_data)[0]
-    capacity = counters * rate
-    additional_counters = max(0, np.ceil(predicted_time / rate) - counters)
-    return predicted_length, predicted_time, additional_counters
+    
+    predicted_queue_length = model_length.predict(input_data)[0]
+    predicted_queue_time = model_time.predict(input_data)[0]
+    
+    # Calculate additional counters required based on predicted queue time
+    required_counters = np.ceil(predicted_queue_length / PROCESSING_RATE_PER_COUNTER)
+    additional_counters = max(0, required_counters - INITIAL_COUNTERS)
+    
+    optimal_counters = calculate_optimal_counters(predicted_queue_time, TARGET_QUEUE_TIME, INITIAL_COUNTERS)
+    
+    return predicted_queue_length, predicted_queue_time, optimal_counters, additional_counters
 
-# Real-Time Monitoring UI
-st.sidebar.subheader("Real-Time Monitoring Input")
-day_of_week = st.sidebar.selectbox("Day of Week", range(7), format_func=lambda x: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][x])
-hour_of_day = st.sidebar.slider("Hour of Day", 0, 23, 12)
-counters = st.sidebar.number_input("Available Counters", min_value=1, max_value=20, value=5)
-processing_rate = st.sidebar.number_input("Processing Rate per Counter (mins)", min_value=1.0, value=15.74)
+# Streamlit UI
+st.title("Real-Time Queue Management")
 
-# Predictions
-length, time, additional = predict_queue_metrics(day_of_week, hour_of_day, counters, processing_rate)
+# Display instructions
+st.write("This application predicts the queue length, queue time, and recommends the optimal number of counters based on real-time input.")
 
-st.subheader("Predicted Queue Metrics")
-st.write(f"**Predicted Queue Length**: {length:.2f} customers")
-st.write(f"**Predicted Queue Time**: {time:.2f} minutes")
-st.write(f"**Additional Counters Needed**: {additional:.0f}")
+# Get user input for time and dynamic averages
+day_of_week = st.slider("Select Day of Week", 0, 6, 0)  # 0 to 6 for Monday to Sunday
+hour_of_day = st.slider("Select Hour of Day", 0, 23, 12)  # 0 to 23 for 24-hour format
 
-# Real-Time Queue Visualization
-summary = df[df['request_type'] == 'Order Fulfillment'].copy()
-summary['hour_of_day'] = summary['queue_in_time'].dt.hour
-summary['day_of_week'] = summary['queue_in_time'].dt.dayofweek
-summary = summary.groupby(['day_of_week', 'hour_of_day']).agg(
-    actual_length=('request_id', 'count'),
-    actual_time=('queue_time', 'mean')
-).reset_index()
+# Display average queue metrics
+df = load_data(DATABASE_PATH)
+df = preprocess_data(df)
+of_df = df[df['request_type'] == 'Order Fulfillment']
+avg_queue_length = of_df.groupby(of_df['queue_in_time'].dt.floor('H')).agg(
+    queue_length=('request_id', 'count'),
+).reset_index()['queue_length'].mean()
+avg_queue_time = of_df.groupby(of_df['queue_in_time'].dt.floor('H')).agg(
+    avg_queue_time=('queue_time', 'mean'),
+).reset_index()['avg_queue_time'].mean()
 
-predicted_summary = pd.DataFrame({
-    'day_of_week': [day_of_week],
-    'hour_of_day': [hour_of_day],
-    'predicted_length': [length],
-    'predicted_time': [time],
-})
+st.write(f"Average Queue Length: {avg_queue_length:.2f} requests")
+st.write(f"Average Queue Time: {avg_queue_time:.2f} minutes")
 
-st.subheader("Queue Visualization")
-fig, ax = plt.subplots(1, 2, figsize=(14, 6))
+# Make predictions and calculate optimal counters
+predicted_length, predicted_time, optimal_counters, additional_counters = predict_queue_metrics_and_counters(
+    day_of_week, hour_of_day, avg_queue_length, avg_queue_time)
 
-# Plot Queue Length
-ax[0].bar(summary['hour_of_day'], summary['actual_length'], label="Actual Queue Length", color="blue", alpha=0.7)
-ax[0].bar([hour_of_day], [length], label="Predicted Queue Length", color="orange", alpha=0.7)
-ax[0].set_xlabel("Hour of Day")
-ax[0].set_ylabel("Queue Length")
-ax[0].set_title("Queue Length Monitoring")
-ax[0].legend()
+st.write(f"Predicted Queue Length: {predicted_length:.2f} requests")
+st.write(f"Predicted Queue Time: {predicted_time:.2f} minutes")
+st.write(f"Recommended Optimal Number of Counters: {optimal_counters}")
+st.write(f"Additional Counters Needed: {additional_counters}")
 
-# Plot Queue Time
-ax[1].bar(summary['hour_of_day'], summary['actual_time'], label="Actual Queue Time", color="green", alpha=0.7)
-ax[1].bar([hour_of_day], [time], label="Predicted Queue Time", color="red", alpha=0.7)
-ax[1].set_xlabel("Hour of Day")
-ax[1].set_ylabel("Queue Time (mins)")
-ax[1].set_title("Queue Time Monitoring")
-ax[1].legend()
+# Plot the queue time vs number of counters
+counters_range = np.arange(INITIAL_COUNTERS, optimal_counters + 5)
+queue_times = [calculate_optimal_counters(predicted_time, TARGET_QUEUE_TIME, c) for c in counters_range]
 
-st.pyplot(fig)
+plt.figure(figsize=(10, 6))
+plt.plot(counters_range, queue_times, label="Queue Time (Order Fulfillment)", color='blue', linestyle='-')
+plt.axhline(y=TARGET_QUEUE_TIME, color='green', linestyle='--', label=f"Target Queue Time ({TARGET_QUEUE_TIME} mins)")
+plt.axvline(x=optimal_counters, color='red', linestyle='--', label=f"Optimal Counters: {optimal_counters}")
+plt.xlabel("Number of Counters")
+plt.ylabel("Queue Time (minutes)")
+plt.title("Optimization of Queue Time vs. Number of Counters")
+plt.legend()
+plt.grid(True)
+st.pyplot()
+
