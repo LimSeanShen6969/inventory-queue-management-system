@@ -65,13 +65,13 @@ def predict_queue_metrics_and_counters(day_of_week, hour_of_day, avg_queue_lengt
     predicted_queue_length = model_length.predict(input_data)[0]
     predicted_queue_time = model_time.predict(input_data)[0]
     
-    # Calculate additional counters required based on predicted queue time
+    # Calculate required counters based on predicted queue length
     required_counters = np.ceil(predicted_queue_length / PROCESSING_RATE_PER_COUNTER)
-    additional_counters = max(0, required_counters - INITIAL_COUNTERS)
     
+    # Calculate optimal counters based on predicted queue time
     optimal_counters = calculate_optimal_counters(predicted_queue_time, TARGET_QUEUE_TIME, INITIAL_COUNTERS)
     
-    return predicted_queue_length, predicted_queue_time, optimal_counters, additional_counters
+    return predicted_queue_length, predicted_queue_time, optimal_counters, required_counters
 
 # Streamlit UI
 st.title("Real-Time Queue Management")
@@ -100,14 +100,14 @@ avg_queue_time = of_df.groupby(of_df['queue_in_time'].dt.floor('H')).agg(
 ).reset_index()['avg_queue_time'].mean()
 
 # Make predictions and calculate optimal counters
-predicted_length, predicted_time, optimal_counters, additional_counters = predict_queue_metrics_and_counters(
+predicted_length, predicted_time, optimal_counters, required_counters = predict_queue_metrics_and_counters(
     day_of_week, hour_of_day, avg_queue_length, avg_queue_time)
 
 # Display predictions
 st.write(f"Predicted Queue Length: {predicted_length:.2f} requests")
 st.write(f"Predicted Queue Time: {predicted_time:.2f} minutes")
-st.write(f"Recommended Optimal Number of Counters: {optimal_counters}")
-st.write(f"Additional Counters Needed: {additional_counters}")
+st.write(f"Recommended Number of Counters Open: {optimal_counters}")
+st.write(f"Required Number of Counters (based on predicted length): {required_counters}")
 
 # Plot the queue time and queue length vs number of counters
 counters_range = np.arange(INITIAL_COUNTERS, optimal_counters + 5)
