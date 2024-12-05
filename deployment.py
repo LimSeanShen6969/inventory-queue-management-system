@@ -14,8 +14,8 @@ INITIAL_COUNTERS = 5  # Default counters at start
 TARGET_QUEUE_TIME = 8  # Target queue time in minutes
 
 # Load pre-trained models
-model_length = load(os.path.join(MODEL_DIR, "QueueLengthModel.joblib"))
-model_time = load(os.path.join(MODEL_DIR, "QueueTimeModel.joblib"))
+model_length = load(os.path.join("QueueLengthModel.joblib"))
+model_time = load(os.path.join("QueueTimeModel.joblib"))
 
 # Function to ingest data from the SQLite database
 def load_data(database_path):
