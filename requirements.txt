@@ -9,4 +9,5 @@ pandas-gbq==0.24.0
 pandas-stubs==2.2.2.240909
 prophet==1.1.6
 sklearn-pandas==2.2.0
-streamlit==1.40.1
+streamlit==1.40.2
+scikit-learn==1.5.2
