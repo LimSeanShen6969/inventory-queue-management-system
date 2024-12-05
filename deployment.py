@@ -80,10 +80,15 @@ st.title("Real-Time Queue Management")
 st.write("This application predicts the queue length, queue time, and recommends the optimal number of counters based on real-time input.")
 
 # Get user input for time and dynamic averages
-day_of_week = st.slider("Select Day of Week", 0, 6, 0)  # 0 to 6 for Monday to Sunday
-hour_of_day = st.slider("Select Hour of Day", 0, 23, 12)  # 0 to 23 for 24-hour format
+st.subheader("Select Day of Week")
+day_of_week = st.radio("Select Day", ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'))
+day_of_week_map = {'Monday': 0, 'Tuesday': 1, 'Wednesday': 2, 'Thursday': 3, 'Friday': 4, 'Saturday': 5, 'Sunday': 6}
+day_of_week = day_of_week_map[day_of_week]
 
-# Display average queue metrics
+st.subheader("Select Hour of Day")
+hour_of_day = st.selectbox("Select Hour", list(range(24)))
+
+# Load data and preprocess
 df = load_data(DATABASE_PATH)
 df = preprocess_data(df)
 of_df = df[df['request_type'] == 'Order Fulfillment']
@@ -94,30 +99,48 @@ avg_queue_time = of_df.groupby(of_df['queue_in_time'].dt.floor('H')).agg(
     avg_queue_time=('queue_time', 'mean'),
 ).reset_index()['avg_queue_time'].mean()
 
-st.write(f"Average Queue Length: {avg_queue_length:.2f} requests")
-st.write(f"Average Queue Time: {avg_queue_time:.2f} minutes")
-
 # Make predictions and calculate optimal counters
 predicted_length, predicted_time, optimal_counters, additional_counters = predict_queue_metrics_and_counters(
     day_of_week, hour_of_day, avg_queue_length, avg_queue_time)
 
+# Display predictions
 st.write(f"Predicted Queue Length: {predicted_length:.2f} requests")
 st.write(f"Predicted Queue Time: {predicted_time:.2f} minutes")
 st.write(f"Recommended Optimal Number of Counters: {optimal_counters}")
 st.write(f"Additional Counters Needed: {additional_counters}")
 
-# Plot the queue time vs number of counters
+# Plot the queue time and queue length vs number of counters
 counters_range = np.arange(INITIAL_COUNTERS, optimal_counters + 5)
 queue_times = [calculate_optimal_counters(predicted_time, TARGET_QUEUE_TIME, c) for c in counters_range]
+queue_lengths = [model_length.predict(pd.DataFrame({
+    'day_of_week': [day_of_week],
+    'hour_of_day': [hour_of_day],
+    'avg_of_queue_length': [avg_queue_length],
+    'avg_of_queue_time': [avg_queue_time]
+}))[0] for c in counters_range]
 
+# Plot the results
 plt.figure(figsize=(10, 6))
-plt.plot(counters_range, queue_times, label="Queue Time (Order Fulfillment)", color='blue', linestyle='-')
-plt.axhline(y=TARGET_QUEUE_TIME, color='green', linestyle='--', label=f"Target Queue Time ({TARGET_QUEUE_TIME} mins)")
+
+# Plot queue length
+plt.subplot(1, 2, 1)
+plt.plot(counters_range, queue_lengths, label="Predicted Queue Length", color='blue')
 plt.axvline(x=optimal_counters, color='red', linestyle='--', label=f"Optimal Counters: {optimal_counters}")
 plt.xlabel("Number of Counters")
-plt.ylabel("Queue Time (minutes)")
-plt.title("Optimization of Queue Time vs. Number of Counters")
+plt.ylabel("Predicted Queue Length")
+plt.title("Queue Length vs. Number of Counters")
 plt.legend()
 plt.grid(True)
-st.pyplot()
 
+# Plot queue time
+plt.subplot(1, 2, 2)
+plt.plot(counters_range, queue_times, label="Predicted Queue Time", color='green')
+plt.axvline(x=optimal_counters, color='red', linestyle='--', label=f"Optimal Counters: {optimal_counters}")
+plt.axhline(y=TARGET_QUEUE_TIME, color='purple', linestyle='--', label=f"Target Queue Time ({TARGET_QUEUE_TIME} mins)")
+plt.xlabel("Number of Counters")
+plt.ylabel("Predicted Queue Time (minutes)")
+plt.title("Queue Time vs. Number of Counters")
+plt.legend()
+plt.grid(True)
+
+st.pyplot()
