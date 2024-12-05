@@ -1,225 +1,127 @@
 import streamlit as st
+import sqlite3
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import pandas as pd
-from prophet import Prophet
-import sqlite3
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-# Initialize session state for inventory management
-if "inventory" not in st.session_state:
-    st.session_state.inventory = {"Item_A": 100, "Item_B": 200}
+# Title
+st.title("Queue Time Optimization with Real-Time Monitoring")
 
-# Database path
-DB_PATH = "inventory_queue.db"
+# Database and Model Setup
+@st.cache_resource
+def load_data():
+    conn = sqlite3.connect("grocery_inventory.db")
+    query = "SELECT request_id, request_type, queue_in_time, queue_out_time FROM inventory_queue_records"
+    df = pd.read_sql_query(query, conn)
+    conn.close()
 
+    df['queue_in_time'] = pd.to_datetime(df['queue_in_time'])
+    df['queue_out_time'] = pd.to_datetime(df['queue_out_time'])
+    df['queue_time'] = (df['queue_out_time'] - df['queue_in_time']).dt.total_seconds() / 60
+    return df
 
-# Queue Time Optimization Function
-def queue_time_optimization():
-    st.title("Queue Time Optimization")
+@st.cache_resource
+def train_models(df):
+    # Filter and feature extraction
+    df_of = df[df['request_type'] == 'Order Fulfillment']
+    df_of['time_slot'] = df_of['queue_in_time'].dt.floor('H')
+    df_of['day_of_week'] = df_of['queue_in_time'].dt.dayofweek
+    df_of['hour_of_day'] = df_of['queue_in_time'].dt.hour
+    summary = df_of.groupby(['time_slot', 'request_type']).agg(
+        queue_length=('request_id', 'count'),
+        avg_queue_time=('queue_time', 'mean')
+    ).reset_index()
+    summary['day_of_week'] = summary['time_slot'].dt.dayofweek
+    summary['hour_of_day'] = summary['time_slot'].dt.hour
+    summary['avg_of_queue_length'] = 5.79
+    summary['avg_of_queue_time'] = 10.00
 
-    # User inputs for queue details
-    stations_current = st.number_input("Enter Current Number of Stations:", min_value=1, value=5)
-    queue_time_of_current = st.number_input("Enter Current Average Queue Time (Order Fulfillment) (minutes):", value=12.5)
-    queue_time_r_current = st.number_input("Enter Current Average Queue Time (Restock) (minutes):", value=20.0)
-    target_queue_time_of = st.number_input("Enter Target Queue Time (Order Fulfillment) (minutes):", value=10.0)
-    target_queue_time_r = st.number_input("Enter Target Queue Time (Restock) (minutes):", value=17.0)
+    # Prepare data
+    X = summary[['day_of_week', 'hour_of_day', 'avg_of_queue_length', 'avg_of_queue_time']]
+    y_length = summary['queue_length']
+    y_time = summary['avg_queue_time']
 
-    # Calculate reduction rates
-    reduction_rate_of = (queue_time_of_current - target_queue_time_of) / stations_current
-    reduction_rate_r = (queue_time_r_current - target_queue_time_r) / stations_current
+    # Train-test split
+    X_train_len, X_test_len, y_train_len, y_test_len = train_test_split(X, y_length, test_size=0.2, random_state=42)
+    X_train_time, X_test_time, y_train_time, y_test_time = train_test_split(X, y_time, test_size=0.2, random_state=42)
 
-    def calculate_queue_times(stations):
-        of_queue_time = queue_time_of_current - reduction_rate_of * (stations - stations_current)
-        r_queue_time = queue_time_r_current - reduction_rate_r * (stations - stations_current)
-        return of_queue_time, r_queue_time
+    # Train models
+    model_length = RandomForestRegressor(random_state=42)
+    model_time = RandomForestRegressor(random_state=42)
+    model_length.fit(X_train_len, y_train_len)
+    model_time.fit(X_train_time, y_train_time)
 
-    # Predict the optimal number of stations
-    stations_needed = stations_current
-    while True:
-        of_queue_time, r_queue_time = calculate_queue_times(stations_needed)
-        if of_queue_time <= target_queue_time_of and r_queue_time <= target_queue_time_r:
-            break
-        stations_needed += 1
+    return model_length, model_time
 
-    st.write(f"Optimal number of stations: **{stations_needed}**")
+# Load data and train models
+df = load_data()
+model_length, model_time = train_models(df)
 
-    # Generate queue time predictions for a range of stations
-    stations_range = np.arange(stations_current, stations_needed + 5)
-    queue_time_of = [calculate_queue_times(st)[0] for st in stations_range]
-    queue_time_r = [calculate_queue_times(st)[1] for st in stations_range]
+# Queue Prediction Function
+def predict_queue_metrics(day_of_week, hour_of_day, counters=5, rate=15.74):
+    input_data = pd.DataFrame({
+        'day_of_week': [day_of_week],
+        'hour_of_day': [hour_of_day],
+        'avg_of_queue_length': [5.79],
+        'avg_of_queue_time': [10.00]
+    })
+    predicted_length = model_length.predict(input_data)[0]
+    predicted_time = model_time.predict(input_data)[0]
+    capacity = counters * rate
+    additional_counters = max(0, np.ceil(predicted_time / rate) - counters)
+    return predicted_length, predicted_time, additional_counters
 
-    # Plot the results
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(stations_range, queue_time_of, label="Order Fulfillment Queue Time", color='green')
-    ax.plot(stations_range, queue_time_r, label="Restock Queue Time", color='blue')
-    ax.axhline(target_queue_time_of, color='green', linestyle='--', label="Target OF Queue Time (10 mins)")
-    ax.axhline(target_queue_time_r, color='blue', linestyle='--', label="Target Restock Queue Time (17 mins)")
-    ax.axvline(stations_needed, color='red', linestyle='--', label=f"Optimal Stations: {stations_needed}")
-    ax.set_xlabel("Number of Stations")
-    ax.set_ylabel("Queue Time (minutes)")
-    ax.set_title("Optimization of Queue Time vs. Number of Stations")
-    ax.legend()
-    ax.grid(True)
-    st.pyplot(fig, clear_figure=True)
+# Real-Time Monitoring UI
+st.sidebar.subheader("Real-Time Monitoring Input")
+day_of_week = st.sidebar.selectbox("Day of Week", range(7), format_func=lambda x: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][x])
+hour_of_day = st.sidebar.slider("Hour of Day", 0, 23, 12)
+counters = st.sidebar.number_input("Available Counters", min_value=1, max_value=20, value=5)
+processing_rate = st.sidebar.number_input("Processing Rate per Counter (mins)", min_value=1.0, value=15.74)
 
-# Restock Recommendation Function
-def restock_recommendation():
-    st.title("Restock Recommendations")
+# Predictions
+length, time, additional = predict_queue_metrics(day_of_week, hour_of_day, counters, processing_rate)
 
-    # Load data from SQLite database
-    if not st.file_uploader("Upload database file if required", type=["db"]):
-        if not DB_PATH:
-            st.error("Database file not found.")
-            return
+st.subheader("Predicted Queue Metrics")
+st.write(f"**Predicted Queue Length**: {length:.2f} customers")
+st.write(f"**Predicted Queue Time**: {time:.2f} minutes")
+st.write(f"**Additional Counters Needed**: {additional:.0f}")
 
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        query = "SELECT * FROM inventory_queue_records"
-        df = pd.read_sql_query(query, conn)
-        conn.close()
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return
+# Real-Time Queue Visualization
+summary = df[df['request_type'] == 'Order Fulfillment'].copy()
+summary['hour_of_day'] = summary['queue_in_time'].dt.hour
+summary['day_of_week'] = summary['queue_in_time'].dt.dayofweek
+summary = summary.groupby(['day_of_week', 'hour_of_day']).agg(
+    actual_length=('request_id', 'count'),
+    actual_time=('queue_time', 'mean')
+).reset_index()
 
-    # Convert datetime columns
-    try:
-        df['queue_in_time'] = pd.to_datetime(df['queue_in_time'])
-        df['queue_out_time'] = pd.to_datetime(df['queue_out_time'])
-        df['month'] = df['queue_in_time'].dt.to_period('M')
-    except Exception as e:
-        st.error(f"Error processing date columns: {e}")
-        return
+predicted_summary = pd.DataFrame({
+    'day_of_week': [day_of_week],
+    'hour_of_day': [hour_of_day],
+    'predicted_length': [length],
+    'predicted_time': [time],
+})
 
-    sold_df = df[df['request_type'] == 'Order Fulfillment']
+st.subheader("Queue Visualization")
+fig, ax = plt.subplots(1, 2, figsize=(14, 6))
 
-    # Parse items
-    def parse_items(items_str):
-        items = {}
-        try:
-            items_list = items_str.split(', ')
-            for item in items_list:
-                name, qty = item.split(': ')
-                items[name] = int(qty)
-        except Exception as e:
-            st.error(f"Error parsing items: {e}")
-        return items
+# Plot Queue Length
+ax[0].bar(summary['hour_of_day'], summary['actual_length'], label="Actual Queue Length", color="blue", alpha=0.7)
+ax[0].bar([hour_of_day], [length], label="Predicted Queue Length", color="orange", alpha=0.7)
+ax[0].set_xlabel("Hour of Day")
+ax[0].set_ylabel("Queue Length")
+ax[0].set_title("Queue Length Monitoring")
+ax[0].legend()
 
-    items_sold_per_month = []
-    for _, row in sold_df.iterrows():
-        item_quantities = parse_items(row['items'])
-        for item, qty in item_quantities.items():
-            items_sold_per_month.append({'month': row['month'], 'item': item, 'quantity': qty})
+# Plot Queue Time
+ax[1].bar(summary['hour_of_day'], summary['actual_time'], label="Actual Queue Time", color="green", alpha=0.7)
+ax[1].bar([hour_of_day], [time], label="Predicted Queue Time", color="red", alpha=0.7)
+ax[1].set_xlabel("Hour of Day")
+ax[1].set_ylabel("Queue Time (mins)")
+ax[1].set_title("Queue Time Monitoring")
+ax[1].legend()
 
-    sold_per_month_df = pd.DataFrame(items_sold_per_month)
-    monthly_sold = sold_per_month_df.groupby(['month', 'item'])['quantity'].sum().unstack().fillna(0)
-
-    restock_needed = {}
-
-    for item in monthly_sold.columns:
-        item_sales = monthly_sold[item].reset_index()
-        item_sales.columns = ['ds', 'y']
-        item_sales['ds'] = item_sales['ds'].dt.to_timestamp()
-
-        if len(item_sales) < 2:
-            st.warning(f"Not enough data to forecast sales for {item}.")
-            continue
-
-        model = Prophet()
-        model.fit(item_sales)
-
-        future = model.make_future_dataframe(periods=3, freq='M')
-        forecast = model.predict(future)
-
-        predicted_sales = forecast[['ds', 'yhat']].tail(3)['yhat'].sum()
-        current_stock = st.session_state.inventory.get(item, 0)
-        restock_needed[item] = max(0, predicted_sales - current_stock)
-
-    st.write("**Restock Recommendations**")
-    for item, quantity in restock_needed.items():
-        st.write(f"{item}: **{round(quantity)} units**")
-
-
-# Inventory Management Function
-def inventory_management():
-    st.title("Inventory Management")
-
-    # Load current inventory from the database
-    try:
-        conn = sqlite3.connect(DB_PATH)
-
-        # Query transaction data
-        query = "SELECT request_id, request_type, items FROM inventory_queue_records ORDER BY queue_in_time"
-        transactions_df = pd.read_sql_query(query, conn)
-        conn.close()
-
-        # Parse items from string format
-        def parse_items(item_string):
-            item_quantities = {}
-            items = item_string.split(", ")
-            for item in items:
-                name, qty = item.split(": ")
-                item_quantities[name] = int(qty)
-            return item_quantities
-
-        # Initialize inventory dictionary
-        inventory = {}
-        for _, row in transactions_df.iterrows():
-            item_quantities = parse_items(row['items'])
-            if row['request_type'] == 'Restock':
-                for item, qty in item_quantities.items():
-                    inventory[item] = inventory.get(item, 0) + qty
-            elif row['request_type'] == 'Order Fulfillment':
-                for item, qty in item_quantities.items():
-                    inventory[item] = inventory.get(item, 0) - qty
-                    if inventory[item] < 0:  # Prevent negative inventory
-                        inventory[item] = 0
-
-        # Convert inventory dictionary to remaining_df
-        remaining_df = pd.DataFrame(list(inventory.items()), columns=['Item', 'Remaining Inventory'])
-        st.session_state.inventory = dict(zip(remaining_df['Item'], remaining_df['Remaining Inventory']))
-    except Exception as e:
-        st.error(f"Error loading inventory: {e}")
-        return
-
-    # Display current inventory
-    def display_inventory():
-        st.write("**Available Inventory:**")
-        for item, qty in st.session_state.inventory.items():
-            st.write(f"{item}: {qty} units")
-
-    display_inventory()
-
-        # Continue button for further orders
-    if st.button("Continue"):
-        st.write("You can now proceed with additional orders.")
-
-    # Add new order
-    st.write("**Add New Order:**")
-    if st.session_state.inventory:
-        item = st.selectbox("Select Item", list(st.session_state.inventory.keys()))
-        qty = st.number_input("Enter Quantity", min_value=1)
-
-        if st.button("Submit Order"):
-            current_stock = st.session_state.inventory.get(item, 0)
-            if current_stock >= qty:
-                st.session_state.inventory[item] -= qty
-                st.write(f"Order fulfilled: {qty} units of {item}")
-            else:
-                st.write(f"Not enough stock for {item}. Available: {current_stock} units.")
-
-            display_inventory()
-    else:
-        st.write("No inventory data available.")
-
-
-
-# Main Navigation
-st.sidebar.title("Navigation")
-option = st.sidebar.radio("Go to", ["Queue Time Optimization", "Restock Recommendation", "Inventory Management"])
-
-if option == "Queue Time Optimization":
-    queue_time_optimization()
-elif option == "Restock Recommendation":
-    restock_recommendation()
-elif option == "Inventory Management":
-    inventory_management()
+st.pyplot(fig)
